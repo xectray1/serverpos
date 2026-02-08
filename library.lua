@@ -18,6 +18,7 @@ local executing = false;
 local cframecallback;
 local activespoofs = {};
 local registeredspoofs = {};
+local persistentloops = {};
 local currentactive;
 local function oncharacter(char)
     primarypart = char:WaitForChild("HumanoidRootPart");
@@ -33,7 +34,7 @@ local hooked = false;
 if not hooked then
     setreadonly(mt, false);
     mt.__index = newcclosure(function(self, property)
-        if self == primarypart and property == "CFrame" and isspoofing then
+        if (not checkcaller() and self == primarypart and property == "CFrame" and isspoofing) then
             return clientcframe;
         end;
         return originalindex(self, property);
@@ -139,42 +140,66 @@ getgenv().serverposition = function(looptype, logicname, targetlogic, priority)
         name = logicname
     };
 end;
-getgenv().setrunning = function(logicname, status)
+getgenv().setrunning = function(logicname, booleanref, persistent)
     local spoofdata = registeredspoofs[logicname];
     if not spoofdata then
         warn("invalid name: " .. tostring(logicname));
         return;
     end;
-    if status == true then
-        for _, v in ipairs(activespoofs) do
-            if v.name == logicname then
-                return;
-            end;
+    local function applystatus(s)
+        local status = s;
+        if typeofcache(s) == "function" then
+            status = s();
         end;
-        table.insert(activespoofs, spoofdata);
-        if not currentactive then
-            currentactive = spoofdata;
-        else
-            if spoofdata.priority > currentactive.priority or (spoofdata.priority == currentactive.priority and spoofdata.timestamp < currentactive.timestamp) then
-                currentactive = spoofdata;
-            end;
-        end;
-        refreshconnection();
-    else
-        local removedcurrent = false;
-        for i, v in ipairs(activespoofs) do
-            if v.name == logicname then
-                if v == currentactive then
-                    removedcurrent = true;
+        if status == true then
+            for _, v in ipairs(activespoofs) do
+                if v.name == logicname then
+                    return;
                 end;
-                table.remove(activespoofs, i);
-                break;
             end;
+            table.insert(activespoofs, spoofdata);
+            if not currentactive then
+                currentactive = spoofdata;
+            else
+                if spoofdata.priority > currentactive.priority or (spoofdata.priority == currentactive.priority and spoofdata.timestamp < currentactive.timestamp) then
+                    currentactive = spoofdata;
+                end;
+            end;
+            refreshconnection();
+        else
+            local removedcurrent = false;
+            for i, v in ipairs(activespoofs) do
+                if v.name == logicname then
+                    if v == currentactive then removedcurrent = true; end;
+                    table.remove(activespoofs, i);
+                    break;
+                end;
+            end;
+            if removedcurrent then evaluatecurrent(); end;
+            refreshconnection();
         end;
-        if removedcurrent then
-            evaluatecurrent();
+    end;
+    applystatus(booleanref);
+    if persistent then
+        persistentloops[logicname] = persistentloops[logicname] or {};
+        persistentloops[logicname].paused = false;
+        persistentloops[logicname].getter = booleanref;
+        if not persistentloops[logicname].connection then
+            persistentloops[logicname].connection = runservice.Heartbeat:Connect(function()
+                local loop = persistentloops[logicname];
+                if not loop.paused then
+                    local desired;
+                    if typeofcache(loop.getter) == "function" then
+                        desired = loop.getter();
+                    else
+                        desired = loop.getter;
+                    end;
+                    if desired ~= getrunning(logicname) then
+                        applystatus(loop.getter);
+                    end;
+                end;
+            end);
         end;
-        refreshconnection();
     end;
 end;
 getgenv().getrunning = function(logicname)
@@ -195,27 +220,43 @@ getgenv().resetcframe = function()
     if primarypart and clientcframe then
         primarypart.CFrame = clientcframe;
     end;
+    for name, _ in pairs(registeredspoofs) do
+        for _, v in ipairs(activespoofs) do
+            if v.name == name then
+                table.remove(activespoofs, _)
+                break;
+            end
+        end
+        if persistentloops[name] then
+            persistentloops[name].paused = true;
+        end
+    end;
+    currentactive = nil;
     if connection then
         connection:Disconnect();
         connection = nil;
         currentlooptype = nil;
     end;
-    activespoofs = {};
-    currentactive = nil;
     stopspoofing = false;
+end;
+getgenv().clearspoofs = function()
+    for _, v in pairs(persistentloops) do
+        if v.connection then
+            v.connection:Disconnect();
+        end;
+    end;
+    activespoofs = {};
+    registeredspoofs = {};
+    persistentloops = {};
+    currentactive = nil;
+    if connection then
+        connection:Disconnect();
+        connection = nil;
+        currentlooptype = nil;
+    end;
 end;
 getgenv().servercallback = function(callback)
     if typeofcache(callback) == "function" then
         cframecallback = callback;
-    end;
-end;
-getgenv().clearspoofs = function()
-    activespoofs = {};
-    registeredspoofs = {};
-    currentactive = nil;
-    if connection then
-        connection:Disconnect();
-        connection = nil;
-        currentlooptype = nil;
     end;
 end;
