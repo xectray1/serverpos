@@ -131,7 +131,7 @@ do
 					cframecallback(clientcframe);
 				end;
 			else
-				warn("callback error . .. spoof.name .. : " .. tostring(result));
+				warn(("callback error [%s]: %s"):format(spoof.name, tostring(result)));
 			end;
 
 			executing = false;
